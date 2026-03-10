@@ -47,16 +47,23 @@ def load_full_graph():
     }).fillna(-1).values
 
     y = torch.tensor(y, dtype=torch.long)
+    time_steps = torch.tensor(features[1].values, dtype=torch.long)
 
-    data = Data(x=x, edge_index=edge_index, y=y)
+    data = Data(x=x, edge_index=edge_index, y=y, time_step=time_steps)
 
     return data
 
-def create_sample(data):
+def create_sample(data, target_step=30):
     total_nodes = data.x.shape[0]
 
-    sampled_nodes = random.sample(range(total_nodes), SAMPLE_SIZE)
-    sampled_nodes = torch.tensor(sampled_nodes)
+    # Sample nodes from a specific time step to preserve edge connections!
+    mask = data.time_step == target_step
+    sampled_nodes = mask.nonzero().flatten()
+    
+    # If the time step doesn't exist (e.g. dummy data), fallback
+    if len(sampled_nodes) == 0:
+        print(f"Time step {target_step} not found, falling back to random sampling.")
+        sampled_nodes = torch.tensor(random.sample(range(total_nodes), min(SAMPLE_SIZE, total_nodes)))
 
     edge_index, _ = subgraph(
         sampled_nodes,
@@ -66,11 +73,14 @@ def create_sample(data):
 
     x = data.x[sampled_nodes]
     y = data.y[sampled_nodes]
+    # Optionally keep time steps in sample
+    ts = data.time_step[sampled_nodes]
 
     sample_graph = Data(
         x=x,
         edge_index=edge_index,
-        y=y
+        y=y,
+        time_step=ts
     )
 
     return sample_graph
