@@ -1,16 +1,53 @@
 import pandas as pd
 import plotly.express as px
 
-def model_comparison():
-    data = {
-        "Model": ["GCN", "GAT", "GraphSAGE", "GIN", "MPNN", "GTN"],
-        "Accuracy": [0.92, 0.94, 0.93, 0.91, 0.92, 0.95],
-        "F1": [0.89, 0.91, 0.90, 0.88, 0.89, 0.92],
-        "ROC": [0.94, 0.96, 0.95, 0.93, 0.94, 0.97]
-    }
+def model_comparison(metrics_dict):
+    # metrics_dict format: {"GCN": {"accuracy": 0.9, ...}, "GAT": {...}}
+    if not metrics_dict:
+        return None
+        
+    df_rows = []
+    for model, metrics in metrics_dict.items():
+        row = {"Model": model}
+        row.update(metrics)
+        df_rows.append(row)
+        
+    df = pd.DataFrame(df_rows)
+    
+    # Bar chart for all metrics side by side
+    df_melted = df.melt(id_vars="Model", var_name="Metric", value_name="Score")
+    fig = px.bar(df_melted, x="Model", y="Score", color="Metric", barmode="group",
+                 title="Model Performance Comparison")
+    
+    return fig
 
-    df = pd.DataFrame(data)
+def radar_chart(metrics_dict):
+    if not metrics_dict:
+        return None
+        
+    df_rows = []
+    for model, metrics in metrics_dict.items():
+        row = {"Model": model}
+        row.update(metrics)
+        df_rows.append(row)
+        
+    df = pd.DataFrame(df_rows)
+    df_melted = df.melt(id_vars="Model", var_name="Metric", value_name="Score")
+    
+    fig = px.line_polar(df_melted, r="Score", theta="Metric", color="Model", line_close=True,
+                        title="Model Performance Radar")
+    return fig
 
-    fig = px.bar(df, x="Model", y="Accuracy")
-
+def plot_confusion_matrix(cm, title="Confusion Matrix"):
+    import plotly.figure_factory as ff
+    
+    x = ['Predicted Normal', 'Predicted Fraud']
+    y = ['Actual Normal', 'Actual Fraud']
+    
+    # Reverse y-axis to match standard CM layout
+    z = cm[::-1]
+    y = y[::-1]
+    
+    fig = ff.create_annotated_heatmap(z, x=x, y=y, colorscale='Blues')
+    fig.update_layout(title=title, margin=dict(t=50, l=100))
     return fig
