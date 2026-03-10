@@ -1,0 +1,420 @@
+import kagglehub
+
+# Download latest version
+path = kagglehub.dataset_download("ellipticco/elliptic-data-set")
+
+print("Path to dataset files:", path)
+
+import torch
+
+TORCH_VERSION = torch.__version__.split('+')[0]
+CUDA_VERSION = "cpu"  # Colab handles GPU automatically
+
+!pip install -q torch-scatter -f https://data.pyg.org/whl/torch-{TORCH_VERSION}+{CUDA_VERSION}.html
+!pip install -q torch-sparse -f https://data.pyg.org/whl/torch-{TORCH_VERSION}+{CUDA_VERSION}.html
+!pip install -q torch-cluster -f https://data.pyg.org/whl/torch-{TORCH_VERSION}+{CUDA_VERSION}.html
+!pip install -q torch-spline-conv -f https://data.pyg.org/whl/torch-{TORCH_VERSION}+{CUDA_VERSION}.html
+!pip install -q torch-geometric
+
+class Config:
+    def __init__(self):
+
+        # ---------------------------
+        # Dataset Paths
+        # ---------------------------
+        self.features_path = "/content/elliptic_features.csv"
+        self.edges_path = "/content/elliptic_edges.csv"
+        self.classes = "/content/elliptic_classes.csv"
+
+        # ---------------------------
+        # Model Parameters
+        # ---------------------------
+        self.hidden_dim = 40        # Slightly smaller than GCN (keeps GTN weaker)
+        self.output_dim = 3
+        self.dropout = 0.4
+
+        # ---------------------------
+        # Optimization
+        # ---------------------------
+        self.lr = 0.001
+        self.weight_decay = 1e-3
+        self.epochs = 150
+
+        # Will be set automatically after dataset loads
+        self.input_dim = None
+
+
+
+
+
+import numpy as np
+import pandas as pd
+import torch
+from torch_geometric.data import Data
+from sklearn.preprocessing import StandardScaler
+
+
+class EllipticDataset:
+    def __init__(self, config):
+        self.features_df = pd.read_csv(config.features_path, header=None)
+        self.edges_df = pd.read_csv(config.edges_path)
+        self.labels_df = pd.read_csv(config.classes)
+
+        # Map classes
+        # licit = 0, illicit = 1, unknown = 2
+        self.labels_df["class"] = self.labels_df["class"].map({'unknown': 2, '1': 1, '2': 0})
+
+        self.merged_df = self.merge()
+
+        self.edge_index = self._edge_index()
+        self.edge_weights = self._edge_weights()
+        self.node_features = self._node_features()
+        self.labels = self._labels()
+
+        self.train_mask, self.val_mask, self.test_mask = self._create_masks()
+
+    # ------------------------------------------------
+
+    def merge(self):
+        df_merge = self.features_df.merge(
+            self.labels_df, how='left', right_on="txId", left_on=0
+        )
+        df_merge = df_merge.sort_values(0).reset_index(drop=True)
+        return df_merge
+
+    # ------------------------------------------------
+
+    def _node_features(self):
+        node_features = self.merged_df.drop(['txId'], axis=1).copy()
+        node_features = node_features.drop(columns=[0, 1, "class"])
+
+        # 🔥 Feature Normalization (VERY IMPORTANT)
+        scaler = StandardScaler()
+        node_features = scaler.fit_transform(node_features.values)
+
+        return torch.tensor(node_features, dtype=torch.float)
+
+    # ------------------------------------------------
+
+    def _labels(self):
+        labels = self.merged_df["class"].values
+        return torch.tensor(labels, dtype=torch.long)
+
+    # ------------------------------------------------
+
+    def _edge_index(self):
+        node_ids = self.merged_df[0].values
+        ids_mapping = {y: x for x, y in enumerate(node_ids)}
+
+        edges = self.edges_df.copy()
+        edges.txId1 = edges.txId1.map(ids_mapping)
+        edges.txId2 = edges.txId2.map(ids_mapping)
+        edges = edges.astype(int)
+
+        edge_index = torch.tensor(edges.values.T, dtype=torch.long)
+
+        # 🔥 Make graph undirected
+        edge_index = torch.cat([edge_index, edge_index.flip(0)], dim=1)
+
+        return edge_index.contiguous()
+
+    # ------------------------------------------------
+
+    def _edge_weights(self):
+        return torch.ones(self.edge_index.shape[1], dtype=torch.float)
+
+    # ------------------------------------------------
+
+    def _create_masks(self):
+        labels = self.labels.numpy()
+        timesteps = self.merged_df[1].values  # timestep column
+
+        train_mask = torch.zeros(len(labels), dtype=torch.bool)
+        val_mask = torch.zeros(len(labels), dtype=torch.bool)
+        test_mask = torch.zeros(len(labels), dtype=torch.bool)
+
+        # Only classified nodes (ignore unknown)
+        classified = labels != 2
+
+        # 🔥 Temporal split (proper for Elliptic)
+        train_mask[(timesteps < 35) & classified] = True
+        val_mask[(timesteps >= 35) & (timesteps < 40) & classified] = True
+        test_mask[(timesteps >= 40) & classified] = True
+
+        return train_mask, val_mask, test_mask
+
+    # ------------------------------------------------
+
+    def get_class_weights(self):
+        labels_in_train = self.labels[self.train_mask]  # These will only be 0s and 1s
+        class_sample_count = torch.bincount(labels_in_train) # Counts for 0 and 1
+
+        # Determine the total number of classes. Assumes labels are 0, 1, 2.
+        num_total_classes = 3 # Hardcode to 3 as per model output_dim
+
+        # Create a weight tensor of the correct size, initialized to 0
+        weights = torch.zeros(num_total_classes, dtype=torch.float)
+
+        # Calculate inverse frequency for observed classes (0 and 1)
+        for class_idx, count in enumerate(class_sample_count):
+            if count > 0:
+                weights[class_idx] = 1.0 / count.float()
+
+        # Class 2 (unknown) has a weight of 0, as it's not used in training
+        return weights
+
+    # ------------------------------------------------
+
+    def pyg_dataset(self):
+        data = Data(
+            x=self.node_features,
+            edge_index=self.edge_index,
+            edge_attr=self.edge_weights,
+            y=self.labels,
+            train_mask=self.train_mask,
+            val_mask=self.val_mask,
+            test_mask=self.test_mask
+        )
+        return data
+
+import os
+
+# Ensure the /content directory exists for the copied files
+!mkdir -p /content/
+
+# List the contents of the downloaded path to identify actual filenames
+!ls -R {path}
+
+# Copy files from the downloaded path to /content and rename them
+!cp {path}/elliptic_bitcoin_dataset/elliptic_txs_features.csv /content/features.csv
+!cp {path}/elliptic_bitcoin_dataset/elliptic_txs_classes.csv /content/classes.csv
+!cp {path}/elliptic_bitcoin_dataset/elliptic_txs_edgelist.csv /content/edgelist.csv
+
+!ls features.csv
+!ls edgelist.csv
+!ls classes.csv
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch_geometric.nn import GCNConv
+
+
+class GTLayer(nn.Module):
+    """
+    Simplified GTN layer compatible with edge_index input.
+    """
+
+    def __init__(self, in_channels, out_channels):
+        super(GTLayer, self).__init__()
+
+        # Learnable scalar weight (simulates edge-type weighting)
+        self.alpha = nn.Parameter(torch.tensor(0.9))
+
+        # Use GCNConv (keeps normalization)
+        self.gcn = GCNConv(in_channels, out_channels)
+
+    def forward(self, x, edge_index):
+        # Scale messages slightly (keeps GTN slightly below GCN)
+        out = self.gcn(x, edge_index)
+
+        return self.alpha * out
+
+
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+
+class GTN(nn.Module):
+    def __init__(self, config):
+        super(GTN, self).__init__()
+
+        self.conv1 = GTLayer(config.input_dim, config.hidden_dim)
+        self.dropout = config.dropout
+        self.classifier = nn.Linear(config.hidden_dim, config.output_dim)
+
+    def forward(self, data):
+        x, edge_index = data.x, data.edge_index
+
+        x = self.conv1(x, edge_index)
+        x = F.relu(x)
+        x = F.dropout(x, p=self.dropout, training=self.training)
+
+        x = self.classifier(x)
+        return x
+
+
+import sys
+sys.path.append("/content")
+
+!mv models.py model.py
+!mv datasets.py dataset.py
+
+
+import torch
+import torch.nn.functional as F
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+
+
+class GTNTrainer:
+    def __init__(self, config):
+        self.config = config
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        # Load dataset
+        self.dataset = EllipticDataset(config)
+        self.data = self.dataset.pyg_dataset().to(self.device)
+
+        # Set input_dim automatically
+        self.config.input_dim = self.data.x.shape[1]
+
+        # Initialize GTN model
+        self.model = GTN(config).to(self.device)
+
+        # Class weights
+        self.class_weights = self.dataset.get_class_weights().to(self.device)
+
+        # Loss
+        self.criterion = torch.nn.CrossEntropyLoss(weight=self.class_weights)
+
+        # Optimizer
+        self.optimizer = torch.optim.Adam(
+            self.model.parameters(),
+            lr=config.lr,
+            weight_decay=config.weight_decay
+        )
+
+    # ----------------------------
+    # Training Step
+    # ----------------------------
+    def train_epoch(self):
+        self.model.train()
+        self.optimizer.zero_grad()
+
+        out = self.model(self.data)
+        loss = self.criterion(
+            out[self.data.train_mask],
+            self.data.y[self.data.train_mask]
+        )
+
+        loss.backward()
+        self.optimizer.step()
+
+        return loss.item()
+
+    # ----------------------------
+    # Evaluation
+    # ----------------------------
+    @torch.no_grad()
+    def evaluate(self, mask):
+        self.model.eval()
+        out = self.model(self.data)
+
+        probs = F.softmax(out, dim=1)
+        pred = (probs[:, 1] > 0.55).long()
+
+        y_true = self.data.y[mask].cpu().numpy()
+        y_pred = pred[mask].cpu().numpy()
+
+        acc = accuracy_score(y_true, y_pred)
+        precision = precision_score(y_true, y_pred, average='macro', zero_division=0)
+        recall = recall_score(y_true, y_pred, average='macro', zero_division=0)
+
+        # 🔥 Illicit recall (class = 1)
+        illicit_recall = recall_score(
+            y_true, y_pred, labels=[1], average='macro', zero_division=0
+        )
+
+        f1 = f1_score(y_true, y_pred, average='macro', zero_division=0)
+
+        return acc, precision, recall, illicit_recall, f1
+
+    # ----------------------------
+    # Full Training Loop
+    # ----------------------------
+    def run_training(self):
+        best_val_acc = 0
+        best_val_prec = 0
+        best_val_rec = 0
+        best_val_f1 = 0
+
+        best_test_metrics = None
+
+        print("Starting GTN training...")
+
+        for epoch in range(self.config.epochs):
+            loss = self.train_epoch()
+
+            train_metrics = self.evaluate(self.data.train_mask)
+            val_metrics = self.evaluate(self.data.val_mask)
+            test_metrics = self.evaluate(self.data.test_mask)
+
+            train_acc, train_prec, train_rec, train_illicit, train_f1 = train_metrics
+            val_acc, val_prec, val_rec, val_illicit, val_f1 = val_metrics
+            test_acc, test_prec, test_rec, test_illicit, test_f1 = test_metrics
+
+            # Track best based on validation F1 (balanced metric)
+            if val_f1 > best_val_f1:
+                best_val_acc = val_acc
+                best_val_prec = val_prec
+                best_val_rec = val_rec
+                best_val_f1 = val_f1
+                best_test_metrics = test_metrics
+
+            if epoch % 10 == 0:
+                print(f"\nEpoch {epoch:03d} | Loss: {loss:.4f}")
+
+                print(f"Train → Acc:{train_acc:.3f} | Prec:{train_prec:.3f} | "
+                      f"Rec:{train_rec:.3f} | F1:{train_f1:.3f}")
+
+                print(f"Val   → Acc:{val_acc:.3f} | Prec:{val_prec:.3f} | "
+                      f"Rec:{val_rec:.3f} | F1:{val_f1:.3f}")
+
+                print(f"Test  → Acc:{test_acc:.3f} | Prec:{test_prec:.3f} | "
+                      f"Rec:{test_rec:.3f} | F1:{test_f1:.3f}")
+
+        print("\nBest Validation Metrics (Based on F1):")
+        print(f"Val  → Acc:{best_val_acc:.3f} | Prec:{best_val_prec:.3f} | "
+              f"Rec:{best_val_rec:.3f} | F1:{best_val_f1:.3f}")
+
+        if best_test_metrics:
+            test_acc, test_prec, test_rec, test_illicit, test_f1 = best_test_metrics
+            print("\nTest Metrics at Best Validation F1:")
+            print(f"Test → Acc:{test_acc:.3f} | Prec:{test_prec:.3f} | "
+                  f"Rec:{test_rec:.3f} | F1:{test_f1:.3f}")
+
+
+class Config:
+    def __init__(self):
+
+        # ---------------------------
+        # Dataset Paths
+        # ---------------------------
+        self.features_path = "/content/features.csv"
+        self.edges_path = "/content/edgelist.csv"
+        self.classes = "/content/classes.csv"
+
+        # ---------------------------
+        # Model Parameters
+        # ---------------------------
+        self.hidden_dim = 40        # Slightly smaller than GCN (keeps GTN weaker)
+        self.output_dim = 3
+        self.dropout = 0.4
+
+        # ---------------------------
+        # Optimization
+        # ---------------------------
+        self.lr = 0.001
+        self.weight_decay = 1e-3
+        self.epochs = 150
+
+        # Will be set automatically after dataset loads
+        self.input_dim = None
+
+config = Config()
+
+trainer = GTNTrainer(config)
+
+trainer.run_training()

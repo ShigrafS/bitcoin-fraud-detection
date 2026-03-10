@@ -1,0 +1,566 @@
+import kagglehub
+
+# Download latest version
+path = kagglehub.dataset_download("ellipticco/elliptic-data-set")
+
+print("Path to dataset files:", path)
+
+import torch
+
+TORCH_VERSION = torch.__version__.split('+')[0]
+CUDA_VERSION = "cpu"  # Colab handles GPU automatically
+
+!pip install -q torch-scatter -f https://data.pyg.org/whl/torch-{TORCH_VERSION}+{CUDA_VERSION}.html
+!pip install -q torch-sparse -f https://data.pyg.org/whl/torch-{TORCH_VERSION}+{CUDA_VERSION}.html
+!pip install -q torch-cluster -f https://data.pyg.org/whl/torch-{TORCH_VERSION}+{CUDA_VERSION}.html
+!pip install -q torch-spline-conv -f https://data.pyg.org/whl/torch-{TORCH_VERSION}+{CUDA_VERSION}.html
+!pip install -q torch-geometric
+
+import numpy as np
+import pandas as pd
+import torch
+from torch_geometric.data import Data
+from sklearn.preprocessing import StandardScaler
+import textwrap
+
+
+# Define the content of dataset.py using textwrap.dedent for cleaner multiline string handling
+dataset_content = textwrap.dedent("""
+    import numpy as np
+    import pandas as pd
+    import torch
+    from torch_geometric.data import Data
+    from sklearn.preprocessing import StandardScaler
+
+
+    class EllipticDataset:
+        def __init__(self, config):
+            self.features_df = pd.read_csv(config.features_path, header=None)
+            self.edges_df = pd.read_csv(config.edges_path)
+            self.labels_df = pd.read_csv(config.classes)
+
+            # Map classes
+            # licit = 0, illicit = 1, unknown = 2
+            self.labels_df["class"] = self.labels_df["class"].map({'unknown': 2, '1': 1, '2': 0})
+
+            self.merged_df = self.merge()
+
+            self.edge_index = self._edge_index()
+            self.edge_weights = self._edge_weights()
+            self.node_features = self._node_features()
+            self.labels = self._labels()
+
+            self.train_mask, self.val_mask, self.test_mask = self._create_masks()
+
+        # ------------------------------------------------
+
+        def merge(self):
+            df_merge = self.features_df.merge(
+                self.labels_df, how='left', right_on="txId", left_on=0
+            )
+            df_merge = df_merge.sort_values(0).reset_index(drop=True)
+            return df_merge
+
+        # ------------------------------------------------
+
+        def _node_features(self):
+            node_features = self.merged_df.drop(['txId'], axis=1).copy()
+            node_features = node_features.drop(columns=[0, 1, "class"])
+
+            # 🔥 Feature Normalization (VERY IMPORTANT)
+            scaler = StandardScaler()
+            node_features = scaler.fit_transform(node_features.values)
+
+            return torch.tensor(node_features, dtype=torch.float)
+
+        # ------------------------------------------------
+
+        def _labels(self):
+            labels = self.merged_df["class"].values
+            return torch.tensor(labels, dtype=torch.long)
+
+        # ------------------------------------------------
+
+        def _edge_index(self):
+            node_ids = self.merged_df[0].values
+            ids_mapping = {y: x for x, y in enumerate(node_ids)}
+
+            edges = self.edges_df.copy()
+            edges.txId1 = edges.txId1.map(ids_mapping)
+            edges.txId2 = edges.txId2.map(ids_mapping)
+            edges = edges.astype(int)
+
+            edge_index = torch.tensor(edges.values.T, dtype=torch.long)
+
+            # 🔥 Make graph undirected
+            edge_index = torch.cat([edge_index, edge_index.flip(0)], dim=1)
+
+            return edge_index.contiguous()
+
+        # ------------------------------------------------
+
+        def _edge_weights(self):
+            return torch.ones(self.edge_index.shape[1], dtype=torch.float)
+
+        # ------------------------------------------------
+
+        def _create_masks(self):
+            labels = self.labels.numpy()
+            timesteps = self.merged_df[1].values  # timestep column
+
+            train_mask = torch.zeros(len(labels), dtype=torch.bool)
+            val_mask = torch.zeros(len(labels), dtype=torch.bool)
+            test_mask = torch.zeros(len(labels), dtype=torch.bool)
+
+            # Only classified nodes (ignore unknown)
+            classified = labels != 2
+
+            # 🔥 Temporal split (proper for Elliptic)
+            train_mask[(timesteps < 35) & classified] = True
+            val_mask[(timesteps >= 35) & (timesteps < 40) & classified] = True
+            test_mask[(timesteps >= 40) & classified] = True
+
+            return train_mask, val_mask, test_mask
+
+        # ------------------------------------------------
+
+        def get_class_weights(self):
+            labels = self.labels[self.train_mask]
+            class_sample_count = torch.bincount(labels[labels != 2])
+            # Fix typo: 'lass_sample_count' to 'class_sample_count'
+            weight = class_sample_count.sum() / class_sample_count.float()
+            return weight
+
+        # ------------------------------------------------
+
+        def pyg_dataset(self):
+            data = Data(
+                x=self.node_features,
+                edge_index=self.edge_index,
+                edge_attr=self.edge_weights,
+                y=self.labels,
+                train_mask=self.train_mask,
+                val_mask=self.val_mask,
+                test_mask=self.test_mask
+            )
+            return data
+    """)
+
+# The actual class definition for the notebook environment (not written to file)
+class EllipticDataset:
+    def __init__(self, config):
+        self.features_df = pd.read_csv(config.features_path, header=None)
+        self.edges_df = pd.read_csv(config.edges_path)
+        self.labels_df = pd.read_csv(config.classes)
+
+        # Map classes
+        # licit = 0, illicit = 1, unknown = 2
+        self.labels_df["class"] = self.labels_df["class"].map({'unknown': 2, '1': 1, '2': 0})
+
+        self.merged_df = self.merge()
+
+        self.edge_index = self._edge_index()
+        self.edge_weights = self._edge_weights()
+        self.node_features = self._node_features()
+        self.labels = self._labels()
+
+        self.train_mask, self.val_mask, self.test_mask = self._create_masks()
+
+    # ------------------------------------------------
+
+    def merge(self):
+        df_merge = self.features_df.merge(
+            self.labels_df, how='left', right_on="txId", left_on=0
+        )
+        df_merge = df_merge.sort_values(0).reset_index(drop=True)
+        return df_merge
+
+    # ------------------------------------------------
+
+    def _node_features(self):
+        node_features = self.merged_df.drop(['txId'], axis=1).copy()
+        node_features = node_features.drop(columns=[0, 1, "class"])
+
+        # 🔥 Feature Normalization (VERY IMPORTANT)
+        scaler = StandardScaler()
+        node_features = scaler.fit_transform(node_features.values)
+
+        return torch.tensor(node_features, dtype=torch.float)
+
+    # ------------------------------------------------
+
+    def _labels(self):
+        labels = self.merged_df["class"].values
+        return torch.tensor(labels, dtype=torch.long)
+
+    # ------------------------------------------------
+
+    def _edge_index(self):
+        node_ids = self.merged_df[0].values
+        ids_mapping = {y: x for x, y in enumerate(node_ids)}
+
+        edges = self.edges_df.copy()
+        edges.txId1 = edges.txId1.map(ids_mapping)
+        edges.txId2 = edges.txId2.map(ids_mapping)
+        edges = edges.astype(int)
+
+        edge_index = torch.tensor(edges.values.T, dtype=torch.long)
+
+        # 🔥 Make graph undirected
+        edge_index = torch.cat([edge_index, edge_index.flip(0)], dim=1)
+
+        return edge_index.contiguous()
+
+    # ------------------------------------------------
+
+    def _edge_weights(self):
+        return torch.ones(self.edge_index.shape[1], dtype=torch.float)
+
+    # ------------------------------------------------
+
+    def _create_masks(self):
+        labels = self.labels.numpy()
+        timesteps = self.merged_df[1].values  # timestep column
+
+        train_mask = torch.zeros(len(labels), dtype=torch.bool)
+        val_mask = torch.zeros(len(labels), dtype=torch.bool)
+        test_mask = torch.zeros(len(labels), dtype=torch.bool)
+
+        # Only classified nodes (ignore unknown)
+        classified = labels != 2
+
+        train_mask[(timesteps < 35) & classified] = True
+        val_mask[(timesteps >= 35) & (timesteps < 40) & classified] = True
+        test_mask[(timesteps >= 40) & classified] = True
+
+        return train_mask, val_mask, test_mask
+
+    # ------------------------------------------------
+
+    def get_class_weights(self):
+        labels = self.labels[self.train_mask]
+        class_sample_count = torch.bincount(labels[labels != 2])
+        # Fix typo: 'lass_sample_count' to 'class_sample_count'
+        weight = class_sample_count.sum() / class_sample_count.float()
+        return weight
+
+    # ------------------------------------------------
+
+    def pyg_dataset(self):
+        data = Data(
+            x=self.node_features,
+            edge_index=self.edge_index,
+            edge_attr=self.edge_weights,
+            y=self.labels,
+            train_mask=self.train_mask,
+            val_mask=self.val_mask,
+            test_mask=self.test_mask
+        )
+        return data
+
+
+!mkdir -p /content
+with open('/content/dataset.py', 'w') as f:
+    f.write(dataset_content)
+
+
+import os
+import glob
+
+data_dir = '/kaggle/input/elliptic-data-set'
+
+print(f"Listing contents of {data_dir} and its subdirectories:")
+all_files = []
+for root, dirs, files in os.walk(data_dir):
+    for file in files:
+        all_files.append(os.path.join(root, file))
+    for directory in dirs:
+        all_files.append(os.path.join(root, directory) + os.sep)
+
+if not all_files:
+    print(f"No files found in {data_dir} or its subdirectories. This indicates an issue with dataset download or path.")
+else:
+    for f_path in all_files:
+        print(f_path)
+
+print("\nAttempting to find and move files...")
+
+# Use glob to find the files, looking in subdirectories recursively
+features_glob = glob.glob(os.path.join(data_dir, '**', '*features.csv'), recursive=True)
+classes_glob = glob.glob(os.path.join(data_dir, '**', '*classes.csv'), recursive=True)
+edgelist_glob = glob.glob(os.path.join(data_dir, '**', '*edgelist.csv'), recursive=True)
+
+moved_files = []
+
+if features_glob:
+    !mv "{features_glob[0]}" features.csv
+    moved_files.append("features.csv")
+else:
+    print("Warning: features.csv not found using glob.")
+
+if classes_glob:
+    !mv "{classes_glob[0]}" classes.csv
+    moved_files.append("classes.csv")
+else:
+    print("Warning: classes.csv not found using glob.")
+
+if edgelist_glob:
+    !mv "{edgelist_glob[0]}" edgelist.csv
+    moved_files.append("edgelist.csv")
+else:
+    print("Warning: edgelist.csv not found using glob.")
+
+if moved_files:
+    print(f"Successfully moved: {', '.join(moved_files)}")
+else:
+    print("No files were moved. Please check the dataset structure.")
+
+
+!ls features.csv
+!ls edgelist.csv
+!ls classes.csv
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch_geometric.nn import GINConv
+import textwrap
+
+# Define the content of model.py using textwrap.dedent for cleaner multiline string handling
+model_content = textwrap.dedent("""
+    import torch
+    import torch.nn as nn
+    import torch.nn.functional as F
+    from torch_geometric.nn import GINConv
+
+
+    class GIN(nn.Module):
+        def __init__(self, config):
+            super().__init__()
+
+            self.input_dim = config.input_dim
+            self.hidden_dim = config.hidden_dim
+            self.output_dim = config.output_dim
+            self.dropout = config.dropout
+
+            # MLP inside GIN layer
+            def mlp(in_dim, out_dim):
+                return nn.Sequential(
+                    nn.Linear(in_dim, out_dim),
+                    nn.ReLU(),
+                    nn.Linear(out_dim, out_dim)
+                )
+
+            self.conv1 = GINConv(mlp(self.input_dim, self.hidden_dim))
+            self.bn1 = nn.BatchNorm1d(self.hidden_dim)
+
+            self.conv2 = GINConv(mlp(self.hidden_dim, self.hidden_dim))
+            self.bn2 = nn.BatchNorm1d(self.hidden_dim)
+
+            self.classifier = nn.Linear(self.hidden_dim, self.output_dim)
+
+        def forward(self, data):
+            x, edge_index = data.x, data.edge_index
+
+            # Layer 1
+            x = self.conv1(x, edge_index)
+            x = self.bn1(x)
+            x = F.relu(x)
+            x = F.dropout(x, p=self.dropout, training=self.training)
+
+            # Layer 2
+            x = self.conv2(x, edge_index)
+            x = self.bn2(x)
+            x = F.relu(x)
+            x = F.dropout(x, p=self.dropout, training=self.training)
+
+            # Output logits
+            x = self.classifier(x)
+            return x  # 🔥 raw logits (no sigmoid)
+    """)
+
+# The actual class definition for the notebook environment (not written to file)
+class GIN(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+
+        self.input_dim = config.input_dim
+        self.hidden_dim = config.hidden_dim
+        self.output_dim = config.output_dim
+        self.dropout = config.dropout
+
+        # MLP inside GIN layer
+        def mlp(in_dim, out_dim):
+            return nn.Sequential(
+                nn.Linear(in_dim, out_dim),
+                nn.ReLU(),
+                nn.Linear(out_dim, out_dim)
+            )
+
+        self.conv1 = GINConv(mlp(self.input_dim, self.hidden_dim))
+        self.bn1 = nn.BatchNorm1d(self.hidden_dim)
+
+        self.conv2 = GINConv(mlp(self.hidden_dim, self.hidden_dim))
+        self.bn2 = nn.BatchNorm1d(self.hidden_dim)
+
+        self.classifier = nn.Linear(self.hidden_dim, self.output_dim)
+
+    def forward(self, data):
+        x, edge_index = data.x, data.edge_index
+
+        # Layer 1
+        x = self.conv1(x, edge_index)
+        x = self.bn1(x)
+        x = F.relu(x)
+        x = F.dropout(x, p=self.dropout, training=self.training)
+
+        # Layer 2
+        x = self.conv2(x, edge_index)
+        x = self.bn2(x)
+        x = F.relu(x)
+        x = F.dropout(x, p=self.dropout, training=self.training)
+
+        # Output logits
+        x = self.classifier(x)
+        return x  # 🔥 raw logits (no sigmoid)
+
+!mkdir -p /content
+with open('/content/model.py', 'w') as f:
+    f.write(model_content)
+
+
+import sys
+sys.path.append("/content")  # ensure Python sees the uploaded files
+
+from model import GIN
+from dataset import EllipticDataset
+
+import os
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
+
+from model import GIN
+from dataset import EllipticDataset
+
+
+class Trainer:
+    def __init__(self, config):
+        self.config = config
+
+        # Load dataset
+        elliptic_dataset_instance = EllipticDataset(config.dataset)
+        # 🔥 Get class weights from the EllipticDataset instance
+        class_weights = elliptic_dataset_instance.get_class_weights().to(config.train.device)
+
+        self.dataset = elliptic_dataset_instance.pyg_dataset().to(config.train.device)
+        self.config.model.input_dim = self.dataset.num_node_features
+
+        # Model
+        self.model = GIN(config.model).to(config.train.device)
+
+        self.criterion = nn.CrossEntropyLoss(weight=class_weights)
+
+        self.optimizer = optim.Adam(
+            self.model.parameters(),
+            lr=config.train.lr,
+            weight_decay=config.train.weight_decay
+        )
+
+    # ------------------------------------------------
+
+    def compute_metrics(self, preds, labels):
+        acc = accuracy_score(labels, preds)
+        f1 = f1_score(labels, preds)
+        recall = recall_score(labels, preds)
+        precision = precision_score(labels, preds, zero_division=0)
+        return acc, f1, recall, precision
+
+    # ------------------------------------------------
+
+    def train(self):
+        best_val_f1 = 0
+
+        for epoch in range(1, self.config.train.num_epochs + 1):
+            self.model.train()
+            self.optimizer.zero_grad()
+
+            logits = self.model(self.dataset)
+            loss = self.criterion(
+                logits[self.dataset.train_mask],
+                self.dataset.y[self.dataset.train_mask]
+            )
+            loss.backward()
+            self.optimizer.step()
+
+            # Evaluation
+            self.model.eval()
+            with torch.no_grad():
+                logits = self.model(self.dataset)
+
+                train_preds = logits[self.dataset.train_mask].argmax(dim=1).cpu()
+                train_labels = self.dataset.y[self.dataset.train_mask].cpu()
+
+                val_preds = logits[self.dataset.val_mask].argmax(dim=1).cpu()
+                val_labels = self.dataset.y[self.dataset.val_mask].cpu()
+
+            train_acc, train_f1, train_rec, train_prec = self.compute_metrics(train_preds, train_labels)
+            val_acc, val_f1, val_rec, val_prec = self.compute_metrics(val_preds, val_labels)
+
+            if val_f1 > best_val_f1:
+                best_val_f1 = val_f1
+                self.save("best_gin_model")
+
+            if epoch % self.config.train.print_freq == 0:
+                print(f"Epoch {epoch} | Loss: {loss.item():.4f}")
+                print(f"Train → Acc:{train_acc:.3f} F1:{train_f1:.3f} Rec:{train_rec:.3f}")
+                print(f"Val   → Acc:{val_acc:.3f} F1:{val_f1:.3f} Rec:{val_rec:.3f}")
+
+    # ------------------------------------------------
+
+    def test(self):
+        self.model.eval()
+        with torch.no_grad():
+            logits = self.model(self.dataset)
+            preds = logits[self.dataset.test_mask].argmax(dim=1).cpu()
+            labels = self.dataset.y[self.dataset.test_mask].cpu()
+
+        acc, f1, rec, prec = self.compute_metrics(preds, labels)
+        print(f"Test → Acc:{acc:.3f} F1:{f1:.3f} Recall:{rec:.3f} Precision:{prec:.3f}")
+
+    # ------------------------------------------------
+
+    def save(self, name):
+        os.makedirs(self.config.train.save_dir, exist_ok=True)
+        torch.save(self.model.state_dict(), os.path.join(self.config.train.save_dir, f"{name}.pt"))
+
+class Config:
+    class dataset:
+        features_path = "features.csv"
+        edges_path = "edgelist.csv"
+        classes = "classes.csv"
+
+    class train:
+        dataset = "elliptic"
+        model = "gin"
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        lr = 0.007                # 🔥 Better learning speed for GIN
+        weight_decay = 5e-4
+        num_epochs = 200          # 🔥 GNNs need time
+        print_freq = 10
+        save_dir = "./checkpoints"
+
+    class model:
+        input_dim = None          # auto-set
+        hidden_dim = 64           # good capacity
+        output_dim = 2            # 🔥 licit vs illicit
+        dropout = 0.4             # less aggressive than GAT
+
+config = Config()
+
+trainer = Trainer(config)
+
+trainer.train()
+
+trainer.test()
