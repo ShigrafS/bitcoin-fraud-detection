@@ -3,12 +3,12 @@ import plotly.graph_objects as go
 from torch_geometric.utils import to_networkx
 
 def plot_graph(graph_data, fraud_nodes, probabilities=None):
-    # PyG data to networkx for plotting
+                                       
     G = to_networkx(graph_data, to_undirected=True)
     degrees = dict(G.degree())
 
-    # Use a layout that spreads nodes naturally from the center
-    # k regulates the distance between nodes; larger k means further apart
+                                                               
+                                                                          
     pos = nx.spring_layout(G, k=0.15, iterations=60, seed=42)
 
     edge_x = []
@@ -24,7 +24,7 @@ def plot_graph(graph_data, fraud_nodes, probabilities=None):
     edge_trace = go.Scatter(
         x=edge_x,
         y=edge_y,
-        line=dict(width=0.3, color="#000000"),  # Darker, thinner edges like screenshot 2
+        line=dict(width=0.3, color="#000000"),                                           
         hoverinfo='none',
         mode='lines',
         opacity=0.6
@@ -44,21 +44,21 @@ def plot_graph(graph_data, fraud_nodes, probabilities=None):
         node_x.append(x)
         node_y.append(y)
         
-        # Color based on probability gradient if available
+                                                          
         if probabilities and node in probabilities:
             colors.append(probabilities[node])
         else:
             colors.append(1.0 if node in fraud_nodes else 0.0)
             
-        # Hover info
+                    
         deg = degrees.get(node, 0)
         prob = probabilities.get(node, 0) if probabilities else (1.0 if node in fraud_nodes else 0.0)
         
-        # Map label
+                   
         label_id = int(graph_data.y[idx].item())
         label_str = node_label_map.get(label_id, "Unknown")
         
-        # Time step (default to 1 if not present)
+                                                 
         ts = int(graph_data.time_step[idx].item()) if hasattr(graph_data, 'time_step') else 1
         
         hover_text.append(
@@ -69,7 +69,7 @@ def plot_graph(graph_data, fraud_nodes, probabilities=None):
             f"Fraud Prob: {prob:.4f}"
         )
         
-        # Node size based on degree
+                                   
         size = min(30, max(6, deg * 2))
         sizes.append(size)
 
@@ -82,12 +82,12 @@ def plot_graph(graph_data, fraud_nodes, probabilities=None):
         marker=dict(
             size=sizes, 
             color=colors,
-            colorscale='RdYlGn_r', # Red is high prob, Green is low
+            colorscale='RdYlGn_r',                                 
             showscale=True,
             colorbar=dict(title="Fraud Prob", thickness=15),
             cmin=0.0,
             cmax=1.0,
-            line=dict(width=0.5, color="white") # subtle border
+            line=dict(width=0.5, color="white")                
         )
     )
 

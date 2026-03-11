@@ -26,7 +26,7 @@ Models:
 - GTN
 """)
 
-# Sidebar
+         
 st.sidebar.header("Configuration")
 
 model_choice = st.sidebar.selectbox(
@@ -39,7 +39,7 @@ st.sidebar.header("Visualization Settings")
 prob_threshold = st.sidebar.slider("Fraud Probability Threshold", min_value=0.0, max_value=1.0, value=0.5, step=0.05,
                                    help="Nodes with probability above this threshold will jump out visually.")
 
-# Dataset Selection
+                   
 st.sidebar.markdown("---")
 st.sidebar.header("Dataset")
 dataset_source = st.sidebar.radio("Dataset Source", ["Local Sample", "Upload Custom"])
@@ -59,7 +59,7 @@ else:
 
 run_button = st.sidebar.button("Run Detection")
 
-# Layout
+        
 col1, col2 = st.columns([2, 1])
 
 if run_button:
@@ -76,13 +76,13 @@ if run_button:
         st.error(f"Failed to load the graph: {str(e)}")
     if model_choice == "All Models (Compare)":
         all_metrics = {}
-        # Run all models and collect metrics
+                                            
         models_to_run = ["GCN", "GAT", "GraphSAGE", "GIN", "MPNN", "GTN"]
         for m in models_to_run:
             _, m_metrics, m_probs, m_cm = run_model(m, graph)
             all_metrics[m] = m_metrics
             
-        # Select best model for main graph
+                                          
         best_model = "GCN"
         fraud_nodes, metrics, probabilities, cm = run_model(best_model, graph)
         st.info(f"Visualizing results for {best_model} by default when running all models.")
@@ -90,7 +90,7 @@ if run_button:
         fraud_nodes, metrics, probabilities, cm = run_model(model_choice, graph)
         all_metrics = {model_choice: metrics}
 
-    # Filter nodes by threshold
+                               
     filtered_fraud_nodes = [node for node, prob in probabilities.items() if prob >= prob_threshold]
 
     fig = plot_graph(graph, filtered_fraud_nodes, probabilities)
@@ -121,7 +121,7 @@ if run_button:
         degrees = [d for n, d in G_summary.degree()]
         avg_deg = sum(degrees) / len(degrees) if degrees else 0
         
-        # Label counts
+                      
         y_vals = graph.y.tolist()
         normal_cnt = y_vals.count(0)
         fraud_cnt = y_vals.count(1)
@@ -143,7 +143,7 @@ if run_button:
         ts = int(graph.time_step[selected_node].item()) if hasattr(graph, 'time_step') else "N/A"
         deg = dict(G.degree()).get(selected_node, 0)
         
-        # Simple mock connected component for Community
+                                                       
         community_id = list(nx.node_connected_component(G, selected_node))[0]
         
         st.markdown(f"""
@@ -185,7 +185,7 @@ if run_button:
         top_10 = prob_df.sort_values(by="Fraud Probability", ascending=False).head(10)
         st.dataframe(top_10, use_container_width=True)
         
-        # Download CSV
+                      
         csv_data = prob_df.to_csv(index=False).encode('utf-8')
         st.download_button(
             label="Download Predictions (CSV)",

@@ -24,13 +24,13 @@ def load_full_graph():
 
     id_map = {node_id: i for i, node_id in enumerate(node_ids)}
 
-    # Optimize slow replace by mapping each column directly
+                                                           
     source_col = edges.columns[0]
     target_col = edges.columns[1]
     edges[source_col] = edges[source_col].map(id_map)
     edges[target_col] = edges[target_col].map(id_map)
     
-    # Drop any edges where the node wasn't found in id_map
+                                                          
     edges = edges.dropna()
     
     edge_index = edges.values.T
@@ -56,11 +56,11 @@ def load_full_graph():
 def create_sample(data, target_step=30):
     total_nodes = data.x.shape[0]
 
-    # Sample nodes from a specific time step to preserve edge connections!
+                                                                          
     mask = data.time_step == target_step
     sampled_nodes = mask.nonzero().flatten()
     
-    # If the time step doesn't exist (e.g. dummy data), fallback
+                                                                
     if len(sampled_nodes) == 0:
         print(f"Time step {target_step} not found, falling back to random sampling.")
         sampled_nodes = torch.tensor(random.sample(range(total_nodes), min(SAMPLE_SIZE, total_nodes)))
@@ -73,7 +73,7 @@ def create_sample(data, target_step=30):
 
     x = data.x[sampled_nodes]
     y = data.y[sampled_nodes]
-    # Optionally keep time steps in sample
+                                          
     ts = data.time_step[sampled_nodes]
 
     sample_graph = Data(

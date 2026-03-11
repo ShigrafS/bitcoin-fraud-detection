@@ -6,10 +6,10 @@ def run_model(model_name, graph):
     num_nodes = graph.x.shape[0]
     nodes = list(range(num_nodes))
 
-    # mock inference
+                    
     fraud_nodes = random.sample(nodes, int(len(nodes)*0.1))
     
-    # temporary hack just to return completely random probabilities
+                                                                   
     probabilities = {node: random.random() for node in nodes}
 
     metrics = {
@@ -20,7 +20,7 @@ def run_model(model_name, graph):
         "recall": round(random.uniform(0.80, 0.92), 3),
     }
     
-    # Mock confusion matrix: [[TN, FP], [FN, TP]]
+                                                 
     cm = [
         [random.randint(800, 900), random.randint(10, 50)],
         [random.randint(10, 30), random.randint(80, 150)]

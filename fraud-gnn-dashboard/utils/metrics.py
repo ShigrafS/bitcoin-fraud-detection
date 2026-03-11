@@ -2,7 +2,7 @@ import pandas as pd
 import plotly.express as px
 
 def model_comparison(metrics_dict):
-    # metrics_dict format: {"GCN": {"accuracy": 0.9, ...}, "GAT": {...}}
+                                                                        
     if not metrics_dict:
         return None
         
@@ -14,7 +14,7 @@ def model_comparison(metrics_dict):
         
     df = pd.DataFrame(df_rows)
     
-    # Bar chart for all metrics side by side
+                                            
     df_melted = df.melt(id_vars="Model", var_name="Metric", value_name="Score")
     fig = px.bar(df_melted, x="Model", y="Score", color="Metric", barmode="group",
                  title="Model Performance Comparison")
@@ -44,7 +44,7 @@ def plot_confusion_matrix(cm, title="Confusion Matrix"):
     x = ['Predicted Normal', 'Predicted Fraud']
     y = ['Actual Normal', 'Actual Fraud']
     
-    # Reverse y-axis to match standard CM layout
+                                                
     z = cm[::-1]
     y = y[::-1]
     
