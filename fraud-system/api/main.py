@@ -247,3 +247,79 @@ def get_cluster_graph(cluster_id: int):
         "edges": edges_list
     }
 
+
+@app.get("/subgraph/{time_step}")
+def get_subgraph(time_step: int, max_nodes: Optional[int] = 1000):
+    """
+    Returns nodes and edges for a specific time step to render in the visualization.
+    """
+    global pipeline
+    if pipeline is None:
+        raise HTTPException(status_code=503, detail="Pipeline not initialized")
+        
+    if pipeline.features_df is None or pipeline.G is None:
+        raise HTTPException(status_code=500, detail="Graph or features not initialized in pipeline")
+
+    # Get nodes belonging to the specified time step
+    # features_df has columns: 0 (id), 1 (time_step)
+    feat_step = pipeline.features_df[pipeline.features_df.iloc[:, 1] == time_step]
+    if feat_step.empty:
+        raise HTTPException(status_code=404, detail=f"Time step {time_step} not found.")
+        
+    step_nodes = list(feat_step.iloc[:, 0].values)
+    
+    # Limit nodes if there are too many to keep Plotly fast and responsive
+    if max_nodes and len(step_nodes) > max_nodes:
+        import random
+        random.seed(42) # Reproducible subset
+        step_nodes = random.sample(step_nodes, max_nodes)
+        
+    step_nodes_set = set(step_nodes)
+    subG = pipeline.G.subgraph(step_nodes_set)
+    
+    # Build dictionary for fast O(1) lookup
+    class_map = dict(zip(pipeline.classes_df['txId'], pipeline.classes_df['class']))
+    
+    # Format nodes
+    nodes_list = []
+    for n in subG.nodes():
+        score = pipeline.node_probs.get(n, 0.0)
+        # Class mapping from classes_df: '1' is fraud, '2' is normal, 'unknown'
+        orig_class = class_map.get(n, 'unknown')
+        
+        # Human-readable labels
+        label_str = {
+            '1': 'Fraudulent',
+            '2': 'Legitimate',
+            'unknown': 'Unknown'
+        }.get(str(orig_class), 'Unknown')
+        
+        if score > 0.6:
+            color = "Red"
+        elif score > 0.3:
+            color = "Orange"
+        else:
+            color = "Green"
+            
+        nodes_list.append({
+            "id": int(n),
+            "score": float(score),
+            "label": label_str,
+            "color": color
+        })
+        
+    # Format edges
+    edges_list = []
+    for u, v in subG.edges():
+        edges_list.append({
+            "source": int(u),
+            "target": int(v)
+        })
+        
+    return {
+        "time_step": time_step,
+        "nodes": nodes_list,
+        "edges": edges_list
+    }
+
+

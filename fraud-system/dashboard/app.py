@@ -290,6 +290,130 @@ if view == "Overview Dashboard":
         </div>
         """, unsafe_allow_html=True)
 
+    # Full Width Transaction Graph Visualization
+    st.markdown("---")
+    st.markdown("<h3 style='color:#ffffff; font-weight:600;'>Interactive Transaction Network Map</h3>", unsafe_allow_html=True)
+    st.markdown("<p style='color:#8b90a0; margin-bottom: 20px;'>Interactive sub-graph visualization representing active transactions and dependencies at a specific time step, color-coded by real-time GNN fraud probability.</p>", unsafe_allow_html=True)
+    
+    # Let user select time step or probability threshold in a neat control row
+    ctrl_col1, ctrl_col2, ctrl_col3 = st.columns([1, 1, 2])
+    with ctrl_col1:
+        selected_step = st.number_input("Time Step", min_value=1, max_value=49, value=30, step=1)
+    with ctrl_col2:
+        prob_threshold = st.slider("Fraud Prob Threshold", min_value=0.0, max_value=1.0, value=0.5, step=0.05,
+                                   help="Nodes with GNN probability above this value will stand out as suspicious or fraudulent.")
+    
+    # Load sub-graph data from API
+    with st.spinner("Fetching time step subgraph..."):
+        try:
+            r_graph = requests.get(f"{API_URL}/subgraph/{selected_step}", timeout=120).json()
+            sub_nodes = r_graph.get("nodes", [])
+            sub_edges = r_graph.get("edges", [])
+        except Exception as e:
+            st.error(f"Error fetching sub-graph data: {e}")
+            sub_nodes, sub_edges = [], []
+            
+    if not sub_nodes:
+        st.warning(f"No nodes found for Time Step {selected_step}.")
+    else:
+        # Build network layout and render in Plotly (matching the style of fraud-gnn-dashboard)
+        import networkx as nx
+        plot_nx = nx.Graph() # Match original undirected look
+        plot_nx.add_nodes_from([n["id"] for n in sub_nodes])
+        plot_nx.add_edges_from([(e["source"], e["target"]) for e in sub_edges])
+        
+        # Calculate Layout
+        pos = nx.spring_layout(plot_nx, k=0.15, iterations=60, seed=42)
+        
+        # Build Edges
+        edge_x = []
+        edge_y = []
+        for u, v in plot_nx.edges():
+            if u in pos and v in pos:
+                x0, y0 = pos[u]
+                x1, y1 = pos[v]
+                edge_x.extend([x0, x1, None])
+                edge_y.extend([y0, y1, None])
+                
+        edge_trace = go.Scatter(
+            x=edge_x, y=edge_y,
+            line=dict(width=0.3, color='#000000'),
+            hoverinfo='none',
+            mode='lines',
+            opacity=0.6
+        )
+        
+        # Build Nodes
+        node_x = []
+        node_y = []
+        node_color = []
+        node_text = []
+        node_size = []
+        
+        degrees = dict(plot_nx.degree())
+        
+        for n in sub_nodes:
+            nid = n["id"]
+            if nid in pos:
+                x_c, y_c = pos[nid]
+                node_x.append(x_c)
+                node_y.append(y_c)
+                
+                score = n["score"]
+                label = n["label"]
+                
+                node_color.append(score)
+                
+                # Sizing based on degree, exactly matching original
+                deg = degrees.get(nid, 0)
+                size = min(30, max(6, deg * 2))
+                node_size.append(size)
+                
+                node_text.append(
+                    f"<b>Node: {nid}</b><br>"
+                    f"Label: {label}<br>"
+                    f"Time Step: {selected_step}<br>"
+                    f"Degree: {deg}<br>"
+                    f"Fraud Prob: {score:.4f}"
+                )
+                
+        node_trace = go.Scatter(
+            x=node_x, y=node_y,
+            mode='markers',
+            hoverinfo='text',
+            text=node_text,
+            marker=dict(
+                showscale=True,
+                colorscale='RdYlGn_r', # Red-Yellow-Green (reversed, matching old dashboard)
+                cmin=0.0,
+                cmax=1.0,
+                color=node_color,
+                size=node_size,
+                colorbar=dict(
+                    title=dict(text="Fraud Prob", font=dict(color="#000000")),
+                    tickfont=dict(color="#000000"),
+                    thickness=15
+                ),
+                line=dict(width=0.5, color='white')
+            )
+        )
+        
+        fig = go.Figure(data=[edge_trace, node_trace],
+                        layout=go.Layout(
+                            showlegend=False,
+                            hovermode='closest',
+                            margin=dict(b=0, l=0, r=0, t=0),
+                            xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+                            yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+                            plot_bgcolor='white',
+                            paper_bgcolor='white',
+                            height=600
+                        ))
+        
+        # Display the Plotly figure
+        st.plotly_chart(fig, use_container_width=True)
+
+
 # ==========================================================
 # VIEW: CLUSTER EXPLORER
 # ==========================================================
