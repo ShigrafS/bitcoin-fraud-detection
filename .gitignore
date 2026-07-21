@@ -9,10 +9,9 @@ data/*.csv
 scratch/
 l2/
 fraud-system/venv/
-fraud-system/api/__pycache__/
-fraud-system/models/__pycache__/
-fraud-system/pipelines/__pycache__/
-fraud-system/tests/__pycache__/
+# Python bytecode cache
+**/__pycache__/
+*.pyc
 
 # Large Binary artifacts (Optional, keep if small models)
 *.npy
